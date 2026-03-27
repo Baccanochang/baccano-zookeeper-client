@@ -5,6 +5,12 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
     "opener:default"
   ]
 }

@@ -5,7 +5,6 @@ use crate::AppState;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::State;
 
 #[tauri::command]
@@ -69,11 +68,10 @@ pub async fn test_connection(
     connection: ConnectionModel,
 ) -> AppResult<TestConnectionResult> {
     let start = std::time::Instant::now();
-    
+
     match ZkClient::new(&connection) {
         Ok(client) => {
-            let timeout = Duration::from_millis(connection.connection_timeout_ms as u64);
-            match client.wait_for_connection(timeout) {
+            match client.connect_async(connection.connection_timeout_ms as u64).await {
                 Ok(()) => {
                     let latency = start.elapsed().as_millis() as u64;
                     Ok(TestConnectionResult {
@@ -109,10 +107,10 @@ pub async fn connect_zk(
     id: String,
 ) -> AppResult<ConnectResult> {
     let connection = state.db.get_connection(&id)?;
-    
+
     match connection {
         Some(conn) => {
-            match state.zk.connect(&conn) {
+            match state.zk.connect(&conn).await {
                 Ok(_) => Ok(ConnectResult {
                     success: true,
                     message: format!("已连接到 {}", conn.name),

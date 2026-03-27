@@ -1,24 +1,25 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use crate::error::{AppError, AppResult};
 use crate::models::ConnectionModel;
+use zookeeper_client::{Client, CreateMode, Acls, Stat, SessionState};
 
 pub struct ZkClient {
     connection_id: String,
     hosts: String,
+    client: Mutex<Option<Client>>,
     connected: Mutex<bool>,
 }
-
-unsafe impl Send for ZkClient {}
-unsafe impl Sync for ZkClient {}
 
 impl ZkClient {
     pub fn new(connection: &ConnectionModel) -> AppResult<Self> {
         Ok(Self {
             connection_id: connection.id.clone(),
             hosts: connection.hosts.clone(),
+            client: Mutex::new(None),
             connected: Mutex::new(false),
         })
     }
@@ -28,81 +29,155 @@ impl ZkClient {
     }
 
     pub fn state(&self) -> i32 {
-        if *self.connected.lock().unwrap() { 3 } else { 1 }
+        if *self.connected.lock() { 3 } else { 1 }
     }
 
     pub fn is_connected(&self) -> bool {
-        *self.connected.lock().unwrap()
+        *self.connected.lock()
     }
 
-    pub fn wait_for_connection(&self, _timeout: Duration) -> AppResult<()> {
-        let host_count = self.hosts.split(',').count();
-        if host_count == 0 {
-            return Err(AppError::Connection("No hosts specified".to_string()));
-        }
-        
-        *self.connected.lock().unwrap() = true;
-        Ok(())
-    }
+    pub async fn connect_async(&self, timeout_ms: u64) -> AppResult<()> {
+        let hosts = self.hosts.clone();
+        let timeout = Duration::from_millis(timeout_ms);
 
-    pub fn get_children(&self, path: &str) -> AppResult<Vec<String>> {
-        if !self.is_connected() {
-            return Err(AppError::Connection("Not connected".to_string()));
-        }
-        
-        if path == "/" {
-            Ok(vec!["zookeeper".to_string(), "brokers".to_string(), "consumers".to_string()])
-        } else if path == "/zookeeper" {
-            Ok(vec!["config".to_string(), "quota".to_string()])
+        // 使用 Connector 设置超时
+        let connector = Client::connector()
+            .with_session_timeout(timeout)
+            .with_connection_timeout(timeout);
+
+        // 连接 ZooKeeper
+        let client = connector.connect(&hosts).await
+            .map_err(|e| AppError::Connection(format!("Failed to connect: {}", e)))?;
+
+        // 检查会话状态
+        let state = client.state();
+        if state == SessionState::SyncConnected || state == SessionState::ConnectedReadOnly {
+            *self.client.lock() = Some(client);
+            *self.connected.lock() = true;
+            Ok(())
         } else {
-            Ok(vec![])
+            Err(AppError::Connection(format!("Connection failed, state: {:?}", state)))
         }
     }
 
-    pub fn get_data(&self, path: &str) -> AppResult<(Vec<u8>, NodeStat)> {
+    pub async fn get_children_async(&self, path: &str) -> AppResult<Vec<String>> {
         if !self.is_connected() {
             return Err(AppError::Connection("Not connected".to_string()));
         }
-        
-        Ok((format!("Data for {}", path).into_bytes(), NodeStat::default()))
+
+        let zk = {
+            let client_guard = self.client.lock();
+            client_guard.as_ref()
+                .ok_or_else(|| AppError::Connection("Not connected".to_string()))?
+                .clone()
+        };
+
+        let children = zk.list_children(path).await
+            .map_err(|e| AppError::Connection(format!("Failed to get children: {}", e)))?;
+        Ok(children)
     }
 
-    pub fn set_data(&self, path: &str, data: &[u8], _version: i32) -> AppResult<NodeStat> {
+    pub async fn get_data_async(&self, path: &str) -> AppResult<(Vec<u8>, NodeStat)> {
         if !self.is_connected() {
             return Err(AppError::Connection("Not connected".to_string()));
         }
-        
-        let _ = (path, data);
-        Ok(NodeStat::default())
+
+        let zk = {
+            let client_guard = self.client.lock();
+            client_guard.as_ref()
+                .ok_or_else(|| AppError::Connection("Not connected".to_string()))?
+                .clone()
+        };
+
+        let (data, stat) = zk.get_data(path).await
+            .map_err(|e| AppError::Connection(format!("Failed to get data: {}", e)))?;
+        Ok((data, stat.into()))
     }
 
-    pub fn create(&self, path: &str, _data: &[u8], _ephemeral: bool, _sequential: bool) -> AppResult<String> {
+    pub async fn set_data_async(&self, path: &str, data: &[u8], version: i32) -> AppResult<NodeStat> {
         if !self.is_connected() {
             return Err(AppError::Connection("Not connected".to_string()));
         }
-        
-        Ok(path.to_string())
+
+        let zk = {
+            let client_guard = self.client.lock();
+            client_guard.as_ref()
+                .ok_or_else(|| AppError::Connection("Not connected".to_string()))?
+                .clone()
+        };
+
+        let stat = zk.set_data(path, data, Some(version)).await
+            .map_err(|e| AppError::Connection(format!("Failed to set data: {}", e)))?;
+        Ok(stat.into())
     }
 
-    pub fn delete(&self, path: &str, _version: i32) -> AppResult<()> {
+    pub async fn create_async(&self, path: &str, data: &[u8], ephemeral: bool, sequential: bool) -> AppResult<String> {
         if !self.is_connected() {
             return Err(AppError::Connection("Not connected".to_string()));
         }
-        
-        let _ = path;
+
+        let zk = {
+            let client_guard = self.client.lock();
+            client_guard.as_ref()
+                .ok_or_else(|| AppError::Connection("Not connected".to_string()))?
+                .clone()
+        };
+
+        let mode = match (ephemeral, sequential) {
+            (true, true) => CreateMode::EphemeralSequential,
+            (true, false) => CreateMode::Ephemeral,
+            (false, true) => CreateMode::PersistentSequential,
+            (false, false) => CreateMode::Persistent,
+        };
+
+        let options = mode.with_acls(Acls::anyone_all());
+        let (_stat, sequence) = zk.create(path, data, &options).await
+            .map_err(|e| AppError::Connection(format!("Failed to create node: {}", e)))?;
+
+        if sequential {
+            Ok(format!("{}{}", path, sequence))
+        } else {
+            Ok(path.to_string())
+        }
+    }
+
+    pub async fn delete_async(&self, path: &str, version: i32) -> AppResult<()> {
+        if !self.is_connected() {
+            return Err(AppError::Connection("Not connected".to_string()));
+        }
+
+        let zk = {
+            let client_guard = self.client.lock();
+            client_guard.as_ref()
+                .ok_or_else(|| AppError::Connection("Not connected".to_string()))?
+                .clone()
+        };
+
+        zk.delete(path, Some(version)).await
+            .map_err(|e| AppError::Connection(format!("Failed to delete node: {}", e)))?;
         Ok(())
     }
 
-    pub fn exists(&self, path: &str) -> AppResult<bool> {
+    pub async fn exists_async(&self, path: &str) -> AppResult<bool> {
         if !self.is_connected() {
             return Err(AppError::Connection("Not connected".to_string()));
         }
-        
-        Ok(path == "/" || path.starts_with("/zookeeper"))
+
+        let zk = {
+            let client_guard = self.client.lock();
+            client_guard.as_ref()
+                .ok_or_else(|| AppError::Connection("Not connected".to_string()))?
+                .clone()
+        };
+
+        let stat = zk.check_stat(path).await
+            .map_err(|e| AppError::Connection(format!("Failed to check existence: {}", e)))?;
+        Ok(stat.is_some())
     }
 
-    pub fn close(&mut self) {
-        *self.connected.lock().unwrap() = false;
+    pub fn close(&self) {
+        *self.client.lock() = None;
+        *self.connected.lock() = false;
     }
 }
 
@@ -121,6 +196,24 @@ pub struct NodeStat {
     pub pzxid: i64,
 }
 
+impl From<Stat> for NodeStat {
+    fn from(stat: Stat) -> Self {
+        NodeStat {
+            czxid: stat.czxid,
+            mzxid: stat.mzxid,
+            ctime: stat.ctime,
+            mtime: stat.mtime,
+            version: stat.version,
+            cversion: stat.cversion,
+            aversion: stat.aversion,
+            ephemeral_owner: stat.ephemeral_owner,
+            data_length: stat.data_length,
+            num_children: stat.num_children,
+            pzxid: stat.pzxid,
+        }
+    }
+}
+
 pub struct ConnectionManager {
     connections: Mutex<HashMap<String, Arc<ZkClient>>>,
 }
@@ -132,38 +225,40 @@ impl ConnectionManager {
         }
     }
 
-    pub fn connect(&self, connection: &ConnectionModel) -> AppResult<Arc<ZkClient>> {
-        let mut connections = self.connections.lock()
-            .map_err(|e| AppError::Internal(format!("Lock error: {}", e)))?;
-        
-        if let Some(client) = connections.get(&connection.id) {
-            if client.is_connected() {
-                return Ok(client.clone());
+    pub async fn connect(&self, connection: &ConnectionModel) -> AppResult<Arc<ZkClient>> {
+        // 先检查是否已有连接
+        {
+            let connections = self.connections.lock();
+            if let Some(client) = connections.get(&connection.id) {
+                if client.is_connected() {
+                    return Ok(client.clone());
+                }
             }
         }
-        
+
+        // 创建新连接
         let client = Arc::new(ZkClient::new(connection)?);
-        client.wait_for_connection(Duration::from_millis(connection.connection_timeout_ms as u64))?;
-        
+        client.connect_async(connection.connection_timeout_ms as u64).await?;
+
+        // 存储连接
+        let mut connections = self.connections.lock();
         connections.insert(connection.id.clone(), client.clone());
         Ok(client)
     }
 
     pub fn disconnect(&self, connection_id: &str) -> AppResult<()> {
-        let mut connections = self.connections.lock()
-            .map_err(|e| AppError::Internal(format!("Lock error: {}", e)))?;
-        
+        let mut connections = self.connections.lock();
+
         if let Some(client) = connections.remove(connection_id) {
-            let mut client = Arc::try_unwrap(client)
-                .unwrap_or_else(|_| panic!("Multiple references to client"));
+            drop(connections);
             client.close();
         }
-        
+
         Ok(())
     }
 
     pub fn get(&self, connection_id: &str) -> Option<Arc<ZkClient>> {
-        let connections = self.connections.lock().ok()?;
+        let connections = self.connections.lock();
         connections.get(connection_id).cloned()
     }
 }

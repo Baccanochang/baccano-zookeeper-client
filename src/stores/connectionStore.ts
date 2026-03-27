@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { ConnectionConfig, ConnectionStatus } from '../types/connection';
 import * as api from '../utils/invoke';
 import { useNodeStore } from './nodeStore';
+import { toast } from '../utils/toast';
 
 interface ConnectionState {
   connections: ConnectionConfig[];
@@ -47,8 +48,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       } else {
         set({ connections: [...connections, connection] });
       }
+      toast.success('连接配置已保存');
     } catch (err) {
-      set({ error: String(err) });
+      const errorMessage = String(err);
+      set({ error: errorMessage });
+      toast.error(`保存失败: ${errorMessage}`);
       throw err;
     }
   },
@@ -64,8 +68,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       if (wasActive) {
         useNodeStore.getState().clearTree();
       }
+      toast.success('连接已删除');
     } catch (err) {
-      set({ error: String(err) });
+      const errorMessage = String(err);
+      set({ error: errorMessage });
+      toast.error(`删除失败: ${errorMessage}`);
       throw err;
     }
   },
@@ -91,19 +98,26 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       set((state) => {
         const newStatuses = new Map(state.connectionStatuses);
         newStatuses.set(id, newStatus);
-        return { 
+        return {
           connectionStatuses: newStatuses,
           activeConnectionId: result.success ? id : state.activeConnectionId,
         };
       });
+      if (result.success) {
+        toast.success(`已连接到 ZooKeeper`);
+      } else {
+        toast.error(`连接失败: ${result.message}`);
+      }
       return result.success;
     } catch (err) {
-      const errorStatus: ConnectionStatus = { id, status: 'error', error: String(err) };
+      const errorMessage = String(err);
+      const errorStatus: ConnectionStatus = { id, status: 'error', error: errorMessage };
       set((state) => {
         const newStatuses = new Map(state.connectionStatuses);
         newStatuses.set(id, errorStatus);
         return { connectionStatuses: newStatuses };
       });
+      toast.error(`连接失败: ${errorMessage}`);
       return false;
     }
   },
@@ -116,7 +130,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       set((state) => {
         const newStatuses = new Map(state.connectionStatuses);
         newStatuses.set(id, status);
-        return { 
+        return {
           connectionStatuses: newStatuses,
           activeConnectionId: wasActive ? null : state.activeConnectionId,
         };
@@ -124,8 +138,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       if (wasActive) {
         useNodeStore.getState().clearTree();
       }
+      toast.info('已断开连接');
     } catch (err) {
-      set({ error: String(err) });
+      const errorMessage = String(err);
+      set({ error: errorMessage });
+      toast.error(`断开连接失败: ${errorMessage}`);
     }
   },
 

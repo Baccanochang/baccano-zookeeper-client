@@ -28,7 +28,7 @@ pub async fn get_children(
     let client = state.zk.get(&connection_id)
         .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
 
-    let children = client.get_children(&path)?;
+    let children = client.get_children_async(&path).await?;
 
     Ok(NodeChildren { path, children })
 }
@@ -42,7 +42,7 @@ pub async fn get_data(
     let client = state.zk.get(&connection_id)
         .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
 
-    let (data, stat) = client.get_data(&path)?;
+    let (data, stat) = client.get_data_async(&path).await?;
     let name = path.split('/').last().unwrap_or(&path).to_string();
 
     Ok(NodeData {
@@ -64,7 +64,7 @@ pub async fn set_data(
     let client = state.zk.get(&connection_id)
         .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
 
-    client.set_data(&path, data.as_bytes(), version)
+    client.set_data_async(&path, data.as_bytes(), version).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +85,7 @@ pub async fn create_node(
         .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
 
     let data = options.data.unwrap_or_default();
-    client.create(&options.path, data.as_bytes(), options.ephemeral, options.sequential)
+    client.create_async(&options.path, data.as_bytes(), options.ephemeral, options.sequential).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -98,7 +98,7 @@ pub async fn delete_node(
     let client = state.zk.get(&connection_id)
         .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
 
-    client.delete(&path, version)
+    client.delete_async(&path, version).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -110,5 +110,16 @@ pub async fn exists(
     let client = state.zk.get(&connection_id)
         .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
 
-    client.exists(&path)
+    client.exists_async(&path).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn check_connection(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+) -> AppResult<bool> {
+    let client = state.zk.get(&connection_id)
+        .ok_or_else(|| crate::error::AppError::Connection("Not connected".to_string()))?;
+
+    Ok(client.is_connected())
 }

@@ -1,7 +1,10 @@
 pub mod commands;
+pub mod crypto;
 pub mod db;
 pub mod error;
+pub mod log;
 pub mod models;
+pub mod tray;
 pub mod zk;
 
 use db::Database;
@@ -27,7 +30,7 @@ pub fn run() {
                         .join("data")
                 }
             };
-            
+
             let db = match Database::new(app_data_dir) {
                 Ok(db) => db,
                 Err(e) => {
@@ -38,14 +41,17 @@ pub fn run() {
                         .expect(&format!("Failed to initialize database: {}", e))
                 }
             };
-            
+
             let zk = ConnectionManager::new();
-            
-            app.manage(Arc::new(AppState { 
+
+            app.manage(Arc::new(AppState {
                 db: Arc::new(db),
                 zk: Arc::new(zk),
             }));
-            
+
+            // 设置系统托盘
+            tray::setup_tray(app)?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +72,7 @@ pub fn run() {
             commands::create_node,
             commands::delete_node,
             commands::exists,
+            commands::check_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

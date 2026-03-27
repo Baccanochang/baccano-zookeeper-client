@@ -8,7 +8,7 @@ import type { ZNode, CreateNodeOptions } from '../../types/node';
 
 export function MainContent() {
   const { activeConnectionId } = useConnectionStore();
-  const { selectedNodePath, loadNodeChildren, treeData, refreshNode } = useNodeStore();
+  const { selectedNodePath, loadNodeChildren, treeData, refreshNode, loadingPaths, cancelLoad } = useNodeStore();
   const [splitPosition, setSplitPosition] = useState(40);
   const [isDragging, setIsDragging] = useState(false);
   const [nodeData, setNodeData] = useState<ZNode | null>(null);
@@ -17,6 +17,11 @@ export function MainContent() {
   const [editValue, setEditValue] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  // 检查当前选中节点是否正在加载
+  const isLoadingNode = activeConnectionId && selectedNodePath
+    ? loadingPaths.has(`${activeConnectionId}:${selectedNodePath}`)
+    : false;
 
   const handleMouseDown = () => {
     setIsDragging(true);
@@ -197,13 +202,21 @@ export function MainContent() {
               )}
             </div>
             <div className="flex-1 overflow-auto p-4">
-              {isLoading ? (
-                <div className="flex items-center justify-center h-full">
+              {isLoading || isLoadingNode ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3">
                   <span className="text-gray-500">加载中...</span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => selectedNodePath && cancelLoad(selectedNodePath)}
+                  >
+                    取消
+                  </Button>
                 </div>
               ) : nodeData ? (
                 <NodeDetail
                   node={nodeData}
+                  nodePath={selectedNodePath || '/'}
                   editMode={editMode}
                   editValue={editValue}
                   onEditChange={setEditValue}

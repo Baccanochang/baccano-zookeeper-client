@@ -1,5 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{ConnectionModel, ConnectionSummary};
+use crate::crypto::{encrypt, decrypt, get_or_create_key};
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -57,7 +58,19 @@ impl Database {
 
     pub fn save_connection(&self, conn: &ConnectionModel) -> AppResult<()> {
         let db = self.conn.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-        
+
+        // Encrypt credential if present
+        let encrypted_credential = if let Some(ref cred) = conn.auth_credential {
+            if !cred.is_empty() {
+                let key = get_or_create_key()?;
+                Some(encrypt(cred, &key)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         db.execute(
             r#"
             INSERT INTO connections (
@@ -86,7 +99,7 @@ impl Database {
                 conn.session_timeout_ms,
                 conn.connection_timeout_ms,
                 conn.auth_scheme,
-                conn.auth_credential,
+                encrypted_credential,
                 conn.use_ssl as i32,
                 conn.ssl_ca_path,
                 conn.ssl_cert_path,
@@ -96,13 +109,14 @@ impl Database {
                 conn.updated_at.to_rfc3339(),
             ],
         )?;
-        
+
         Ok(())
     }
 
     pub fn list_connections(&self) -> AppResult<Vec<ConnectionModel>> {
         let db = self.conn.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-        
+        let key = get_or_create_key().ok(); // Don't fail if key is not available
+
         let mut stmt = db.prepare(
             r#"
             SELECT id, name, hosts, session_timeout_ms, connection_timeout_ms,
@@ -112,8 +126,19 @@ impl Database {
             ORDER BY name ASC
             "#,
         )?;
-        
+
         let connections = stmt.query_map([], |row| {
+            let encrypted_cred: Option<String> = row.get(6)?;
+            let decrypted_cred = if let (Some(ref cred), Some(ref key)) = (&encrypted_cred, &key) {
+                if !cred.is_empty() {
+                    decrypt(cred, key).ok()
+                } else {
+                    None
+                }
+            } else {
+                encrypted_cred
+            };
+
             Ok(ConnectionModel {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -121,7 +146,7 @@ impl Database {
                 session_timeout_ms: row.get(3)?,
                 connection_timeout_ms: row.get(4)?,
                 auth_scheme: row.get(5)?,
-                auth_credential: row.get(6)?,
+                auth_credential: decrypted_cred,
                 use_ssl: row.get::<_, i32>(7)? != 0,
                 ssl_ca_path: row.get(8)?,
                 ssl_cert_path: row.get(9)?,
@@ -133,13 +158,14 @@ impl Database {
         })?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::Internal(e.to_string()))?;
-        
+
         Ok(connections)
     }
 
     pub fn get_connection(&self, id: &str) -> AppResult<Option<ConnectionModel>> {
         let db = self.conn.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-        
+        let key = get_or_create_key().ok();
+
         let mut stmt = db.prepare(
             r#"
             SELECT id, name, hosts, session_timeout_ms, connection_timeout_ms,
@@ -149,8 +175,19 @@ impl Database {
             WHERE id = ?1
             "#,
         )?;
-        
+
         let result = stmt.query_row(params![id], |row| {
+            let encrypted_cred: Option<String> = row.get(6)?;
+            let decrypted_cred = if let (Some(ref cred), Some(ref key)) = (&encrypted_cred, &key) {
+                if !cred.is_empty() {
+                    decrypt(cred, key).ok()
+                } else {
+                    None
+                }
+            } else {
+                encrypted_cred
+            };
+
             Ok(ConnectionModel {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -158,7 +195,7 @@ impl Database {
                 session_timeout_ms: row.get(3)?,
                 connection_timeout_ms: row.get(4)?,
                 auth_scheme: row.get(5)?,
-                auth_credential: row.get(6)?,
+                auth_credential: decrypted_cred,
                 use_ssl: row.get::<_, i32>(7)? != 0,
                 ssl_ca_path: row.get(8)?,
                 ssl_cert_path: row.get(9)?,
@@ -168,7 +205,7 @@ impl Database {
                 updated_at: row.get::<_, String>(13)?.parse().unwrap_or_else(|_| chrono::Utc::now()),
             })
         });
-        
+
         match result {
             Ok(conn) => Ok(Some(conn)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

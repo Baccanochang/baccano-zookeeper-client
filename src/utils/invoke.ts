@@ -93,3 +93,7 @@ export async function deleteNode(connectionId: string, path: string, version: nu
 export async function exists(connectionId: string, path: string): Promise<boolean> {
   return await invoke<boolean>('exists', { connectionId, path });
 }
+
+export async function checkConnection(connectionId: string): Promise<boolean> {
+  return await invoke<boolean>('check_connection', { connectionId });
+}

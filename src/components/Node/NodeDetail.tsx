@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import type { ZNode } from '../../types/node';
 
 interface NodeDetailProps {
   node: ZNode;
+  nodePath: string;
   editMode: boolean;
   editValue: string;
   onEditChange: (value: string) => void;
@@ -20,9 +22,37 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-export default function NodeDetail({ node, editMode, editValue, onEditChange, onSave }: NodeDetailProps) {
+export default function NodeDetail({ node, nodePath, editMode, editValue, onEditChange, onSave }: NodeDetailProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyPath = async () => {
+    try {
+      await navigator.clipboard.writeText(nodePath);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy path:', err);
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {/* 节点路径 */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-sm font-medium text-gray-700">节点路径</h4>
+          <button
+            onClick={handleCopyPath}
+            className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded transition-colors"
+          >
+            {copied ? '已复制 ✓' : '复制路径'}
+          </button>
+        </div>
+        <div className="bg-gray-50 p-2 rounded font-mono text-sm text-gray-800 break-all">
+          {nodePath}
+        </div>
+      </div>
+
       <div>
         <div className="flex items-center justify-between mb-2">
           <h4 className="text-sm font-medium text-gray-700">数据内容</h4>

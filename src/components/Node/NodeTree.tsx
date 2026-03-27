@@ -74,6 +74,9 @@ export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) 
     const isExpanded = localExpandedPaths.has(path);
     const isLoading = loadingPaths.has(nodeKey);
     const isSelected = selectedNodePath === path;
+    // 如果 hasChildren 未定义但 isLoaded 为 false，则假设可能有子节点
+    const mayHaveChildren = node.hasChildren === undefined ? !node.isLoaded : node.hasChildren;
+    const showExpandIcon = mayHaveChildren || node.children.length > 0;
 
     return (
       <div key={path} style={{ paddingLeft: `${depth * 12}px` }}>
@@ -83,7 +86,7 @@ export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) 
           }`}
           onClick={() => handleNodeClick(path)}
         >
-          {node.hasChildren && (
+          {showExpandIcon && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -99,7 +102,7 @@ export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) 
             </button>
           )}
           <span className="ml-1">
-            {node.hasChildren ? (
+            {showExpandIcon ? (
               <FolderIcon className="w-4 h-4 text-yellow-500" />
             ) : (
               <FileIcon className="w-4 h-4 text-gray-400" />
