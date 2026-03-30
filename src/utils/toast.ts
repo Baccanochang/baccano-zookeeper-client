@@ -2,12 +2,6 @@ import type { ToastMessage } from '../components/ui/Toast';
 
 type ToastType = 'success' | 'error' | 'warning' | 'info';
 
-interface ToastAddOptions {
-  type: ToastType;
-  message: string;
-  duration?: number;
-}
-
 type ToastAddFunction = (options: Omit<ToastMessage, 'id'>) => void;
 
 let addToastFn: ToastAddFunction | null = null;

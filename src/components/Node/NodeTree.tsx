@@ -1,5 +1,6 @@
 import { useState, useEffect, ReactElement } from 'react';
 import { useNodeStore } from '../../stores';
+import NodeContextMenu from './NodeContextMenu';
 
 function ChevronDownIcon({ className }: { className?: string }) {
   return (
@@ -36,11 +37,15 @@ function FileIcon({ className }: { className?: string }) {
 interface NodeTreeProps {
   connectionId: string;
   onNodeSelect: (path: string | null) => void;
+  onCreateChild?: (parentPath: string) => void;
+  onDeleteNode?: (path: string) => void;
+  onRefreshNode?: (path: string) => void;
 }
 
-export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) {
+export default function NodeTree({ connectionId, onNodeSelect, onCreateChild, onDeleteNode, onRefreshNode }: NodeTreeProps) {
   const { treeData, selectedNodePath, loadingPaths, selectNode, loadNodeChildren } = useNodeStore();
   const [localExpandedPaths, setLocalExpandedPaths] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<{ path: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     loadNodeChildren(connectionId, '/');
@@ -64,6 +69,16 @@ export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) 
     });
   };
 
+  const handleContextMenu = (e: React.MouseEvent, path: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ path, x: e.clientX, y: e.clientY });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
+  };
+
   const getNodeKey = (path: string) => `${connectionId}:${path}`;
 
   const renderNode = (path: string, depth: number = 0): ReactElement | null => {
@@ -85,6 +100,7 @@ export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) 
             isSelected ? 'bg-blue-50' : ''
           }`}
           onClick={() => handleNodeClick(path)}
+          onContextMenu={(e) => handleContextMenu(e, path)}
         >
           {showExpandIcon && (
             <button
@@ -144,8 +160,20 @@ export default function NodeTree({ connectionId, onNodeSelect }: NodeTreeProps) 
   }
 
   return (
-    <div className="w-full overflow-auto">
-      {renderNode('/', 0)}
-    </div>
+    <>
+      <div className="w-full overflow-auto">
+        {renderNode('/', 0)}
+      </div>
+      {contextMenu && (
+        <NodeContextMenu
+          position={{ x: contextMenu.x, y: contextMenu.y }}
+          isRootNode={contextMenu.path === '/'}
+          onClose={closeContextMenu}
+          onCreateChild={() => onCreateChild?.(contextMenu.path)}
+          onDeleteNode={() => onDeleteNode?.(contextMenu.path)}
+          onRefresh={() => onRefreshNode?.(contextMenu.path)}
+        />
+      )}
+    </>
   );
 }

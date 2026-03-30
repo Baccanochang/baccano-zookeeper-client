@@ -3,6 +3,7 @@ import { useConnectionStore, useNodeStore } from '../../stores';
 import { NodeTree, NodeDetail, CreateNodeModal, DeleteNodeModal } from '../Node';
 import { Button, Modal } from '../ui';
 import * as api from '../../utils/invoke';
+import { toast } from '../../utils/toast';
 
 import type { ZNode, CreateNodeOptions } from '../../types/node';
 
@@ -17,6 +18,9 @@ export function MainContent() {
   const [editValue, setEditValue] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [createParentPath, setCreateParentPath] = useState('/');
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
+  const [pendingDeleteNodeData, setPendingDeleteNodeData] = useState<ZNode | null>(null);
 
   // 检查当前选中节点是否正在加载
   const isLoadingNode = activeConnectionId && selectedNodePath
@@ -77,32 +81,70 @@ export function MainContent() {
 
   const handleCreateNode = async (options: CreateNodeOptions) => {
     if (!activeConnectionId) return;
-    
+
     try {
       await api.createNode(activeConnectionId, options);
       setShowCreateModal(false);
-      if (selectedNodePath) {
-        await refreshNode(activeConnectionId, selectedNodePath);
-      }
+      toast.success('节点创建成功');
+      // 刷新父节点
+      const parentPath = options.path.split('/').slice(0, -1).join('/') || '/';
+      await refreshNode(activeConnectionId, parentPath);
       await handleNodeSelect(options.path);
     } catch (error) {
+      toast.error(`创建失败: ${error}`);
       throw error;
     }
   };
 
   const handleDeleteNode = async () => {
-    if (!activeConnectionId || !selectedNodePath || !nodeData) return;
-    
+    const deletePath = pendingDeletePath || selectedNodePath;
+    const deleteData = pendingDeleteNodeData || nodeData;
+    if (!activeConnectionId || !deletePath || !deleteData) return;
+
     try {
-      await api.deleteNode(activeConnectionId, selectedNodePath, nodeData.stat.version);
+      await api.deleteNode(activeConnectionId, deletePath, deleteData.stat.version);
       setShowDeleteModal(false);
+      setPendingDeletePath(null);
+      setPendingDeleteNodeData(null);
+      toast.success('节点删除成功');
       setNodeData(null);
       if (activeConnectionId) {
-        const parentPath = selectedNodePath.split('/').slice(0, -1).join('/') || '/';
+        const parentPath = deletePath.split('/').slice(0, -1).join('/') || '/';
         await refreshNode(activeConnectionId, parentPath);
       }
     } catch (error) {
+      toast.error(`删除失败: ${error}`);
       console.error('Failed to delete node:', error);
+    }
+  };
+
+  // 右键菜单回调
+  const handleCreateChild = (parentPath: string) => {
+    setCreateParentPath(parentPath);
+    setShowCreateModal(true);
+  };
+
+  const handleDeleteFromMenu = async (path: string) => {
+    if (!activeConnectionId || path === '/') return;
+
+    try {
+      const data = await api.getData(activeConnectionId, path);
+      setPendingDeletePath(path);
+      setPendingDeleteNodeData(data);
+      setShowDeleteModal(true);
+    } catch (error) {
+      toast.error(`获取节点信息失败: ${error}`);
+    }
+  };
+
+  const handleRefreshFromMenu = async (path: string) => {
+    if (!activeConnectionId) return;
+
+    try {
+      await refreshNode(activeConnectionId, path);
+      toast.success('刷新成功');
+    } catch (error) {
+      toast.error(`刷新失败: ${error}`);
     }
   };
 
@@ -168,6 +210,9 @@ export function MainContent() {
               <NodeTree
                 connectionId={activeConnectionId}
                 onNodeSelect={handleNodeSelect}
+                onCreateChild={handleCreateChild}
+                onDeleteNode={handleDeleteFromMenu}
+                onRefreshNode={handleRefreshFromMenu}
               />
             </div>
           </div>
@@ -243,7 +288,7 @@ export function MainContent() {
         title="创建节点"
       >
         <CreateNodeModal
-          parentPath={selectedNodePath || '/'}
+          parentPath={createParentPath}
           onCreate={handleCreateNode}
           onCancel={() => setShowCreateModal(false)}
         />
@@ -251,14 +296,22 @@ export function MainContent() {
 
       <Modal
         isOpen={showDeleteModal}
-        onClose={() => setShowDeleteModal(false)}
+        onClose={() => {
+          setShowDeleteModal(false);
+          setPendingDeletePath(null);
+          setPendingDeleteNodeData(null);
+        }}
         title="删除节点"
       >
         <DeleteNodeModal
-          nodePath={selectedNodePath || ''}
-          hasChildren={nodeData?.stat.num_children ? nodeData.stat.num_children > 0 : false}
+          nodePath={pendingDeletePath || selectedNodePath || ''}
+          hasChildren={(pendingDeleteNodeData?.stat.num_children ?? nodeData?.stat.num_children ?? 0) > 0}
           onConfirm={handleDeleteNode}
-          onCancel={() => setShowDeleteModal(false)}
+          onCancel={() => {
+            setShowDeleteModal(false);
+            setPendingDeletePath(null);
+            setPendingDeleteNodeData(null);
+          }}
         />
       </Modal>
     </>

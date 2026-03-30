@@ -30,7 +30,7 @@ export interface TreeNode {
   children: string[];
   isLoaded: boolean;
   isLoading: boolean;
-  hasChildren: boolean;
+  hasChildren?: boolean; // undefined means unknown, need to load
 }
 
 export interface CreateNodeOptions {
